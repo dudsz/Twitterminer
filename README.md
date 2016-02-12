@@ -1,0 +1,2 @@
+# Twitterminer
+Erlang school project
