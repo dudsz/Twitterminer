@@ -1,0 +1,289 @@
+-module(handler).
+-export([show_today/2, show_today_revised/2, show_last_7/2, show_last_7_revised/2, show_last_30/2, show_last_30_revised/2, go/0, delete_object/0, fetch/0, interval/4, mapreduce/2, maptags/3, redtags/2,  timestamp/0, timestampYMD/0, match_query/2, storeTop10/2, loop/0]).
+
+
+%% ----------------------------------------------------------------------
+%% Running the file
+%% ----------------------------------------------------------------------
+%% This requires that you have riak-erlang client on your computer.
+%% 1: Change directory to directory with handler moudle
+%% 2: Start erlang with the line below here where you add YOUR riak-erlang client path instead,
+%% erl -pa /home/erlach/riak-erlang-client/ebin/ /home/erlach/riak-erlang-client/deps/*/ebin
+%% 3: compile handler, c(handler).
+%% 4: Run it, handler:go(). This will store 6, top10 mapreduced lists
+%% into riak. Top10 and Top10 Revised lists for today, 1 week and 1 month.
+%% ----------------------------------------------------------------------
+
+
+%% -----------------------------------------------------------------------
+%% Local Server
+%% ----------------------------------------------------------------------
+%% Reload nodes, sudo dev1/bin/riak start and do it for all 5 nodes.
+%% Add beam path file to all nodes, advance.config file.
+%% ----------------------------------------------------------------------
+
+
+%% ----------------------------------------------------------------------
+%% Settings
+%% -----------------------------------------------------------------------
+%% IP: "127.0.0.1", 10017 or  "129.16.155.22", 8087
+%% Keys: = [{Bucket, Key}, {Bucket, Key}] in binary
+%% Bucket = <<"Alpha">>
+%% Resultbucket = <<"Result">>
+%% Different keys for each time interval sent in each individual function.
+%% ----------------------------------------------------------------------
+
+
+%% ----------------------------------------------------------------------
+%% Handler
+%% ----------------------------------------------------------------------
+
+go() -> 
+	{ok, Pid} = riakc_pb_socket:start_link("129.16.155.22", 8087), 
+	Bucket = <<"Alpha">>,
+	spawn(handler, show_today, [Pid, Bucket]),
+	spawn(handler, show_last_7, [Pid, Bucket]),
+	spawn(handler, show_last_30, [Pid, Bucket]),
+	spawn(handler, show_today_revised, [Pid, Bucket]),
+	spawn(handler, show_last_7_revised, [Pid, Bucket]),
+	spawn(handler, show_last_30_revised, [Pid, Bucket]).
+	
+
+%% Show results for today
+show_today(Pid, Bucket) ->
+	io:format("Updating todays Top 10 list... ~n"),
+	Key1 = <<"Top10_Today">>,
+	Timestamp2 = timestampYMD(),
+	Timestamp1 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	Keys = interval_keys(Range, Bucket),
+	Result = mapreduce(Pid, Keys),
+	Top10 = sortList(Result),
+	io:format("Top 10 Today: ~p~n", [Top10]),
+	storeTop10(Top10, Key1),
+	io:format("Daily Top 10 updated ~n").
+
+%% Show results for today revised list
+show_today_revised(Pid, Bucket) -> 
+	io:format("Updating todays Top 10 Revised list... ~n"),
+	Key1 = <<"Filtered_Top10_Today">>,
+	Timestamp2 = timestampYMD(),
+	Timestamp1 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	ProfanityKeys = profanity_keys(Pid, Bucket),
+	FilteredKeys = filtered_keys(Range, Bucket, ProfanityKeys),
+	FilteredResult = mapreduce(Pid, FilteredKeys),
+	FilteredTop10 = sortList(FilteredResult),
+	storeTop10(FilteredTop10, Key1),
+	io:format("Daily Top 10 Revised updated ~n").
+
+%% Show results for last 7 days
+show_last_7(Pid, Bucket) ->
+	io:format("Updating last 7 days Top 10 list... ~n"),
+	Key1 = <<"Top10_Week">>,
+	Timestamp1 = timestamp_7_days_ago(),
+	Timestamp2 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	Keys = interval_keys(Range, Bucket),
+	Result = mapreduce(Pid, Keys),
+	Top10 = sortList(Result),
+	io:format("Top10 last 7 days: ~p~n", [Top10]),
+	storeTop10(Top10, Key1),
+	io:format("Last 7 days Top 10 updated ~n").
+
+%% Show results for last 7 days revised list
+show_last_7_revised(Pid, Bucket) -> 
+	io:format("Updating last 7 days Top 10 revised list... ~n"),
+	Key1 = <<"Filtered_Top10_Week">>,
+	Timestamp1 = timestamp_7_days_ago(),
+	Timestamp2 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	ProfanityKeys = profanity_keys(Pid, Bucket),
+	FilteredKeys = filtered_keys(Range, Bucket, ProfanityKeys),
+	FilteredResult = mapreduce(Pid, FilteredKeys),
+	FilteredTop10 = sortList(FilteredResult),
+	storeTop10(FilteredTop10, Key1),
+	io:format("Last 7 days Top 10 revised list updated ~n").
+
+%% Show results for last 30 days
+show_last_30(Pid, Bucket) ->
+	io:format("Updating last 30 days Top 10 list... ~n"),
+	Key1 = <<"Top10_Month">>,
+	Timestamp1 = timestamp_30_days_ago(),
+	Timestamp2 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	Keys = interval_keys(Range, Bucket),
+	Result = mapreduce(Pid, Keys),
+	Top10 = sortList(Result),
+	io:format("Top10 last 30 days: ~p~n", [Top10]),
+	storeTop10(Top10, Key1),
+	io:format("Last 30 days Top 10 list updated ~n").
+
+%% Show results for last 30 days revised list
+show_last_30_revised(Pid, Bucket) ->
+	io:format("Updating last 30 days Top 10 revised list... ~n"),
+	Key1 = <<"Filtered_Top10_Week">>,
+	Timestamp1 = timestamp_30_days_ago(),
+	Timestamp2 = timestampYMD(),
+	Range = interval(Pid, Bucket, Timestamp1, Timestamp2),
+	ProfanityKeys = profanity_keys(Pid, Bucket),
+	FilteredKeys = filtered_keys(Range, Bucket, ProfanityKeys),
+	FilteredResult = mapreduce(Pid, FilteredKeys),
+	FilteredTop10 = sortList(FilteredResult),
+	storeTop10(FilteredTop10, Key1),
+	io:format("Last 30 days Top 10 revised list updated ~n").
+
+%% Remove object from Bucket
+delete_object() -> 
+	{ok, Pid} = riakc_pb_socket:start_link("129.16.155.22", 8087),
+	Bucket = <<"Top10">>,
+	Key = <<"">>,
+	riakc_pb_socket:delete(Pid, Bucket, Key),
+	io:format("Key deleted, ").
+
+%% Fetch value from key
+fetch() -> 
+	{ok, Pid} = riakc_pb_socket:start_link("129.16.155.22", 8087),
+	ResBuckets = riakc_pb_socket:list_keys(Pid, <<"Alpha">>),
+	ResBuckets.
+	%{ok, Fetched} = riakc_pb_socket:get(Pid, Bucket, Key),
+	%Value = riakc_obj:get_value(Fetched),
+	%{ok, binary_to_term(Value)}.
+
+%% Mapreduce for counting tags.
+mapreduce(Pid, Keys) -> 
+	{ok, [{1, [Result]}]} = riakc_pb_socket:mapred(
+                         Pid,
+                         Keys,
+                         [{map, {modfun, handler, maptags}, false, false},
+                          {reduce, {modfun, handler, redtags}, none, true}]),
+	dict:to_list(Result).
+
+
+maptags(RiakObject, _, _) ->
+	{_, _, HashtagList} = binary_to_term(riak_object:get_value(RiakObject)), [dict:from_list([{I, 1} || I <- HashtagList])].
+
+
+redtags(Input, _) ->
+	[lists:foldl(
+		fun(Tag, Acc) ->
+			dict:merge(fun(_, Amount1, Amount2) ->
+				Amount1 + Amount2 end, Tag, Acc) end, dict:new(),
+			Input)].
+
+
+%% Timestamp in year-month-day, hour:min:sec format
+timestamp() ->
+	{{Year, Month, Day}, {Hour, Min, Sec}} = calendar:local_time(),
+    Format = "~4.10.0B-~2.10.0B-~2.10.0B ~2.10.0B:~2.10.0B:~2.10.0B",
+    IsoFormat = io_lib:format(Format, [Year, Month, Day, Hour, Min, Sec]),
+    list_to_binary(IsoFormat).
+
+%% Timetamp in year-month-day format
+timestampYMD() ->
+	{{Year, Month, Day}, _} = calendar:local_time(),
+    Format = "~4.10.0B-~2.10.0B-~2.10.0B",
+    IsoFormat = io_lib:format(Format, [Year, Month, Day]),
+    list_to_binary(IsoFormat).
+
+%% Timestamp for last 7 days.
+timestamp_7_days_ago() ->
+	{{Year, Month, Day}, _} = calendar:local_time(),
+	{Y, M, D} = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days({Year, Month, Day}) - 7),
+	Format = "~4.10.0B-~2.10.0B-~2.10.0B",
+	IsoFormat = io_lib:format(Format, [Y, M, D]),
+    list_to_binary(IsoFormat).
+
+%% Timestamp for last 30 days.
+timestamp_30_days_ago() ->
+	{{Year, Month, Day}, _} = calendar:local_time(),
+	{Y, M, D} = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days({Year, Month, Day}) - 30),
+	Format = "~4.10.0B-~2.10.0B-~2.10.0B",
+	IsoFormat = io_lib:format(Format, [Y, M, D]),
+    list_to_binary(IsoFormat).
+
+
+%% Retrieve something in time interval
+interval(Pid, Bucket, Timestamp1, Timestamp2) -> 
+	{_, {_, Range, _, _}} =	riakc_pb_socket:get_index_range(
+		Pid, 
+		Bucket, 
+		{binary_index, "timestamp"}, 
+		Timestamp1, Timestamp2), Range.
+
+%% Bucket + Key to use as Key in mapreduce
+interval_keys(Range, Bucket) ->
+	[{Bucket, Keys} || Keys <- Range].
+
+
+%% Fixa lista med otillåtna ord
+profanity_keys(Pid, Bucket) ->
+	{_, {_, ProfanityKeys, _, _}} = riakc_pb_socket:get_index(
+		Pid, 
+		Bucket, 
+		{binary_index, "hashtags"}, 
+		<<"Lust">>), ProfanityKeys.
+
+%% Filtered range without keys containing profanity tags
+filtered_keys(Range, Bucket, ProfanityKeys) ->
+	NewRange = Range -- ProfanityKeys,
+	[{Bucket, FilteredKeys} || FilteredKeys <- NewRange].
+	
+
+%% This performs exact match index query using binary
+%% Can change to integer_index
+match_query(Pid, Bucket) -> 
+	{_, {_, Match, _, _}} = riakc_pb_socket:get_index(
+		Pid, 
+		Bucket,
+		{binary_index, "Hashtag"}, 
+		<<"MTVStars">>), Match. 
+
+
+%% Sorting in top10
+sortList(Result)->
+	Sort = lists:reverse(lists:keysort(2, Result)), 
+	Top10 = lists:sublist(Sort, 1, 10),
+	Top10.
+    
+%% Storing the results into a result bucket that can be
+%% retrieved from website.
+storeTop10(List, Key) -> storeTop10(List, Key, []).
+storeTop10([H|T], Key, Acc) ->	
+	case T of
+		[] -> 
+			{A, B} = H,
+			Hashtag = list_to_atom(string:to_upper(A)), %% string:to_lower()
+			Final = Acc ++ [{Hashtag, B}],
+			% Final is the list after remove quotes
+			V = lists:flatten(io_lib:write(Final)),
+			Value = list_to_binary(V),
+			Timestamp = timestampYMD(),
+			Bucket = <<"Result">>,
+			%Key = <<"Top10">>,
+			%io:format("Key: ~p~n",[Value]),
+			{ok, Pid} = riakc_pb_socket:start_link("129.16.155.22", 8087), 
+			Object = riakc_obj:new(Bucket, Key, Value), 
+			MetaData = riakc_obj:get_update_metadata(Object),
+	    	ObjectSecondary = riakc_obj:set_secondary_index(MetaData, 
+	    		[{{binary_index, "Timestamp"}, [Timestamp]}]),
+	    	NewObject = riakc_obj:update_metadata(Object, ObjectSecondary),
+			riakc_pb_socket:put(Pid, NewObject);
+		_ ->
+			{A,B } = H,
+			Hashtag = list_to_atom(string:to_upper(A)), %% string:to_lower()
+			storeTop10(T, Key, Acc ++ [{Hashtag, B}])
+
+	end.
+
+%% Loop 
+loop() ->
+    receive
+    	{Pid, start} ->
+    		go(),
+    		loop();
+    	{'EXIT', Pid, _} -> 
+    		main:start_link_handler(),
+    		loop()
+
+    end.
